@@ -6,8 +6,18 @@ const express = require('express');
 const crypto = require('crypto');
 const bodyParser = require('body-parser');
 const request = require('request');
-const app = express();
 const uuid = require('uuid');
+const mongoose = require('mongoose');
+
+// Connect to MongoDB
+mongoose.connect(config.mongo.uri, config.mongo.options);
+mongoose.connection.on('error', function(err) {
+    console.error(`MongoDB connection error: ${err}`);
+    process.exit(-1)
+});
+
+// Setup Server
+const app = express();
 
 
 // Messenger API parameters
@@ -184,6 +194,26 @@ function handleEcho(messageId, appId, metadata) {
 
 function handleApiAiAction(sender, action, responseText, contexts, parameters) {
     switch (action) {
+        case "detailed-application":
+            const firstContext = contexts[0];
+            if (isDefined(firstContext) && firstContext.name == 'job_application' && firstContext.parameters) {
+                const phoneNumber = (isDefined(firstContext.parameters['phone-number']) &&
+                    firstContext.parameters['phone-number'] != '') ? firstContext.parameters['phone-number'] : '';
+
+                const userName = (isDefined(firstContext.parameters['user-name']) &&
+                    firstContext.parameters['user-name'] != '') ? firstContext.parameters['user-name'] : '';
+
+                const jobVacancy = (isDefined(firstContext.parameters['job-vacancy']) &&
+                    firstContext.parameters['job-vacancy'] != '') ? firstContext.parameters['job-vacancy'] : '';
+
+                const yearOfExperience = (isDefined(firstContext.parameters['years-of-experience']) &&
+                    firstContext.parameters['years-of-experience'] != '') ? firstContext.parameters['years-of-experience'] : '';
+
+                const previousJob = (isDefined(firstContext.parameters['previous-job']) &&
+                    firstContext.parameters['previous-job'] != '') ? firstContext.parameters['previous-job'] : '';
+            }
+            sendTextMessage(sender, responseText);
+            break;
         case "job-enquiry":
             let replies = [{
                     "content_type": "text",
@@ -302,7 +332,6 @@ function handleApiAiResponse(sender, response) {
         for (var i = 0; i < messages.length; i++) {
 
             if (previousType == 1 && (messages[i].type != 1 || i == messages.length - 1)) {
-
                 timeout = (i - 1) * timeoutInterval;
                 setTimeout(handleCardMessages.bind(null, cardTypes, sender), timeout);
                 cardTypes = [];
@@ -328,7 +357,8 @@ function handleApiAiResponse(sender, response) {
         console.log('Unknown query' + response.result.resolvedQuery);
         sendTextMessage(sender, "I'm not sure what you want. Can you be more specific?");
     } else if (isDefined(action)) {
-        handleApiAiAction(sender, action, responseText, contexts, parameters);
+        let apiResponseText = messages[0].speech;
+        handleApiAiAction(sender, action, apiResponseText, contexts, parameters);
     } else if (isDefined(responseData) && isDefined(responseData.facebook)) {
         try {
             console.log('Response as formatted message' + responseData.facebook);
@@ -337,7 +367,6 @@ function handleApiAiResponse(sender, response) {
             sendTextMessage(sender, err.message);
         }
     } else if (isDefined(responseText)) {
-
         sendTextMessage(sender, responseText);
     }
 }
