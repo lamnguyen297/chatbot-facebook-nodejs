@@ -34,6 +34,9 @@ if (!config.API_AI_CLIENT_ACCESS_TOKEN) {
 if (!config.FB_APP_SECRET) {
     throw new Error('missing FB_APP_SECRET');
 }
+if (!config.CHATBASE_API_KEY) {
+    throw new Error('missing CHATBASE_API_KEY');
+}
 if (!config.SERVER_URL) { //used for ink to static files
     throw new Error('missing SERVER_URL');
 }
@@ -94,8 +97,6 @@ app.post('/webhook/', function(req, res) {
     var data = req.body;
     console.log(JSON.stringify(data));
 
-
-
     // Make sure this is a page subscription
     if (data.object == 'page') {
         // Iterate over each entry
@@ -103,7 +104,6 @@ app.post('/webhook/', function(req, res) {
         data.entry.forEach(function(pageEntry) {
             var pageID = pageEntry.id;
             var timeOfEvent = pageEntry.time;
-
 
             // Iterate over each messaging event
             pageEntry.messaging.forEach(function(messagingEvent) {
@@ -144,6 +144,10 @@ function receivedMessage(event) {
 
     if (!sessionIds.has(senderID)) {
         sessionIds.set(senderID, uuid.v1());
+    }
+
+    if (!sessionIds.has('recipientId')) {
+        sessionIds.set('recipientId', recipientID);
     }
     //console.log("Received message for user %d and page %d at %d with message:", senderID, recipientID, timeOfMessage);
     //console.log(JSON.stringify(message));
@@ -409,6 +413,7 @@ function sendToApiAi(sender, text) {
     apiaiRequest.on('response', (response) => {
         if (isDefined(response.result)) {
             handleApiAiResponse(sender, response);
+            sendApiAiResponseToChatbase(sender, response);
         }
     });
 
@@ -417,7 +422,41 @@ function sendToApiAi(sender, text) {
 }
 
 
+function sendApiAiResponseToChatbase(sender, response) {
+    const messages = response.result.resolvedQuery;
+    const intent = response.result.metadata.intentName;
 
+    const timeStamp = new Date(response.timestamp);
+
+    const postData = {
+        "sender": { "id": sender },
+        "recipient": { "id": sessionIds.get('recipientId') },
+        "timestamp": timeStamp.valueOf(),
+        "message": {
+            "text": messages
+        },
+        "chatbase_fields": {
+            "intent": intent,
+            "version": "1.00",
+            "not_handled": true,
+            "feedback": false
+        }
+    };
+
+    request({
+        uri: 'https://chatbase.com/api/facebook/message_received?api_key=' + config.CHATBASE_API_KEY,
+        method: 'POST',
+        json: postData
+
+    }, function(error, response, body) {
+        if (!error && response.statusCode == 200) {
+            console.log('Send to chatbase success');
+        } else {
+            console.error(response.reason);
+        }
+
+    });
+}
 
 function sendTextMessage(recipientId, text) {
     var messageData = {
