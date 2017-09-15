@@ -8,6 +8,7 @@ const bodyParser = require('body-parser');
 const request = require('request');
 const uuid = require('uuid');
 const mongoose = require('mongoose');
+const User = require('./user.model');
 
 // Connect to MongoDB
 mongoose.connect(config.mongo.uri, config.mongo.options);
@@ -103,6 +104,7 @@ app.post('/webhook/', function(req, res) {
             var pageID = pageEntry.id;
             var timeOfEvent = pageEntry.time;
 
+
             // Iterate over each messaging event
             pageEntry.messaging.forEach(function(messagingEvent) {
                 if (messagingEvent.optin) {
@@ -197,20 +199,7 @@ function handleApiAiAction(sender, action, responseText, contexts, parameters) {
         case "detailed-application":
             const firstContext = contexts[0];
             if (isDefined(firstContext) && firstContext.name == 'job_application' && firstContext.parameters) {
-                const phoneNumber = (isDefined(firstContext.parameters['phone-number']) &&
-                    firstContext.parameters['phone-number'] != '') ? firstContext.parameters['phone-number'] : '';
-
-                const userName = (isDefined(firstContext.parameters['user-name']) &&
-                    firstContext.parameters['user-name'] != '') ? firstContext.parameters['user-name'] : '';
-
-                const jobVacancy = (isDefined(firstContext.parameters['job-vacancy']) &&
-                    firstContext.parameters['job-vacancy'] != '') ? firstContext.parameters['job-vacancy'] : '';
-
-                const yearOfExperience = (isDefined(firstContext.parameters['years-of-experience']) &&
-                    firstContext.parameters['years-of-experience'] != '') ? firstContext.parameters['years-of-experience'] : '';
-
-                const previousJob = (isDefined(firstContext.parameters['previous-job']) &&
-                    firstContext.parameters['previous-job'] != '') ? firstContext.parameters['previous-job'] : '';
+                updateUserDetailApplication(sender, firstContext);
             }
             sendTextMessage(sender, responseText);
             break;
@@ -237,6 +226,45 @@ function handleApiAiAction(sender, action, responseText, contexts, parameters) {
             //unhandled action, just send back the text
             sendTextMessage(sender, responseText);
     }
+}
+
+function updateUserDetailApplication(fbUserId, context) {
+    const phoneNumber = (isDefined(context.parameters['phone-number']) &&
+        context.parameters['phone-number'] != '') ? context.parameters['phone-number'] : '';
+
+    const userName = (isDefined(context.parameters['user-name']) &&
+        context.parameters['user-name'] != '') ? context.parameters['user-name'] : '';
+
+    const jobVacancy = (isDefined(context.parameters['job-vacancy']) &&
+        context.parameters['job-vacancy'] != '') ? context.parameters['job-vacancy'] : '';
+
+    const yearOfExperience = (isDefined(context.parameters['years-of-experience']) &&
+        context.parameters['years-of-experience'] != '') ? context.parameters['years-of-experience'] : '';
+
+    const previousJob = (isDefined(context.parameters['previous-job']) &&
+        context.parameters['previous-job'] != '') ? context.parameters['previous-job'] : '';
+
+    const query = User.where({ fb_id: fbUserId });
+    query.findOne().exec()
+        .then(user => {
+            user.name = userName;
+            user.previous_job = previousJob;
+            user.year_of_experience = yearOfExperience;
+            user.phone_number = phoneNumber;
+            user.job_vacancy = jobVacancy;
+            return user.save()
+                .then(() => {
+                    console.log('update user:%s successs', userName);
+                })
+                .catch(err => {
+                    console.log(err);
+                })
+        })
+        .catch(err => {
+            console.log(err);
+        });
+
+
 }
 
 function handleMessage(message, sender) {
@@ -691,7 +719,7 @@ function sendAccountLinking(recipientId) {
 function greetUserText(userId) {
     //first read user firstname
     request({
-        uri: 'https://graph.facebook.com/v2.7/' + userId,
+        uri: 'https://graph.facebook.com/v2.10/' + userId,
         qs: {
             access_token: config.FB_PAGE_TOKEN
         }
@@ -699,13 +727,14 @@ function greetUserText(userId) {
     }, function(error, response, body) {
         if (!error && response.statusCode == 200) {
 
-            var user = JSON.parse(body);
+            const fbUser = JSON.parse(body);
 
-            if (user.first_name) {
+            if (fbUser.first_name) {
                 console.log("FB user: %s %s, %s",
-                    user.first_name, user.last_name, user.gender);
+                    fbUser.first_name, fbUser.last_name, fbUser.gender);
 
-                sendTextMessage(userId, "Welcome " + user.first_name + '!');
+                sendTextMessage(userId, "Welcome " + fbUser.first_name + '!');
+                createNewUserFromFB(userId, fbUser);
             } else {
                 console.log("Cannot get data for fb user with id",
                     userId);
@@ -715,6 +744,50 @@ function greetUserText(userId) {
         }
 
     });
+}
+
+function createNewUserFromFB(userId, fbUser) {
+    const query = User.where({ fb_id: userId });
+    query.findOne().exec()
+        .then(user => {
+            if (!user) {
+                const newUser = new User({
+                    fb_id: userId,
+                    first_name: fbUser.first_name,
+                    last_name: fbUser.last_name,
+                    profile_pic: fbUser.profile_pic,
+                    locale: fbUser.locale,
+                    gender: fbUser.gender
+                });
+                newUser.save(function(err) {
+                    if (err)
+                        console.log(err);
+                    else
+                        console.log(newUser);
+                })
+            }
+        })
+        .catch(err => {
+            console.log(err);
+        })
+        // query.findOne(function(err, user) {
+        //     if (!user) {
+        //         const newUser = new User({
+        //             fb_id: userId,
+        //             first_name: fbUser.first_name,
+        //             last_name: fbUser.last_name,
+        //             profile_pic: fbUser.profile_pic,
+        //             locale: fbUser.locale,
+        //             gender: fbUser.gender
+        //         });
+        //         newUser.save(function(err) {
+        //             if (err)
+        //                 console.log(err);
+        //             else
+        //                 console.log(newUser);
+        //         })
+        //     }
+        // });
 }
 
 /*
@@ -766,12 +839,14 @@ function receivedPostback(event) {
     // The 'payload' param is a developer-defined field which is set in a postback 
     // button for Structured Messages. 
     var payload = event.postback.payload;
-
     switch (payload) {
+        case 'FACEBOOK_WELCOME':
+            greetUserText(senderID);
+            break;
         default:
-        //unindentified payload
+            //unindentified payload
             sendTextMessage(senderID, "I'm not sure what you want. Can you be more specific?");
-        break;
+            break;
 
     }
 
